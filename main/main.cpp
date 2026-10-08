@@ -1,0 +1,181 @@
+/*
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: CC0-1.0
+ */
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_err.h"
+#include "esp_log.h"
+#include "nvs_flash.h"
+#include "driver/gpio.h"
+#include "bsp/esp-bsp.h"
+#include "bsp_board_extra.h"
+#include "esp_brookesia.hpp"
+#include "apps.h"
+
+#define LVGL_PORT_INIT_CONFIG()   \
+    {                             \
+        .task_priority = 4,       \
+        .task_stack = 10 * 1024,  \
+        .task_affinity = -1,      \
+        .task_max_sleep_ms = 500, \
+        .timer_period_ms = 5,     \
+    }
+
+static const char *TAG = "app_main";
+
+static void eth_init_task(void *arg)
+{
+    (void)arg;
+    esp_err_t ret_eth = bsp_eth_init();
+    if (ret_eth != ESP_OK) {
+        ESP_LOGE(TAG, "Ethernet init failed: %s", esp_err_to_name(ret_eth));
+    } else {
+        ESP_LOGI(TAG, "Ethernet init successfully");
+    }
+    vTaskDelete(NULL);
+}
+
+extern "C" void app_main(void)
+{
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+
+    esp_err_t ret_spiffs = bsp_spiffs_mount();
+    if (ret_spiffs != ESP_OK) {
+        ESP_LOGE(TAG, "SPIFFS mount failed: %s", esp_err_to_name(ret_spiffs));
+    } else {
+        ESP_LOGI(TAG, "SPIFFS mount successfully");
+    }
+
+    esp_err_t ret_sdcard = bsp_sdcard_mount();
+    if (ret_sdcard != ESP_OK) {
+        ESP_LOGE(TAG, "SD card mount failed: %s", esp_err_to_name(ret_sdcard));
+    } else {
+        ESP_LOGI(TAG, "SD card mount successfully");
+    }
+
+    esp_err_t ret_codec = bsp_extra_codec_init();
+    if (ret_codec != ESP_OK) {
+        ESP_LOGE(TAG, "Codec init failed: %s", esp_err_to_name(ret_codec));
+    } else {
+        ESP_LOGI(TAG, "Codec init successfully");
+    }
+
+    esp_err_t ret_rgb = bsp_rgb_led_init();
+    if (ret_rgb != ESP_OK) {
+        ESP_LOGE(TAG, "RGB LED init failed: %s", esp_err_to_name(ret_rgb));
+    } else {
+        const uint8_t white_10pct = (uint8_t)(255 * 10 / 100);
+        ret_rgb = bsp_rgb_led_set_rgb(white_10pct, white_10pct, white_10pct);
+        if (ret_rgb != ESP_OK) {
+            ESP_LOGE(TAG, "RGB LED set failed: %s", esp_err_to_name(ret_rgb));
+        } else {
+            ESP_LOGI(TAG, "RGB LED white @10%% (RGB=%u)", white_10pct);
+        }
+    }
+
+    bsp_display_cfg_t cfg = {
+        .lvgl_port_cfg = LVGL_PORT_INIT_CONFIG(),
+        .buffer_size = BSP_LCD_DRAW_BUFF_SIZE,
+        .double_buffer = BSP_LCD_DRAW_BUFF_DOUBLE,
+        .hw_cfg =
+            {
+                .hdmi_resolution = BSP_HDMI_RES_NONE,
+                .dsi_bus =
+                    {
+                        .phy_clk_src = static_cast<mipi_dsi_phy_clock_source_t>(0),
+                        .lane_bit_rate_mbps = BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS,
+                    },
+            },
+        .flags =
+            {
+                .buff_dma = false,
+                .buff_spiram = true,
+                .sw_rotate = false,
+            },
+    };
+    lv_display_t *disp = bsp_display_start_with_config(&cfg);
+    if (disp == nullptr) {
+        ESP_LOGE(TAG, "Display initialization failed; UI startup stopped");
+        return;
+    }
+    bsp_display_backlight_on();
+
+    xTaskCreate(eth_init_task, "eth_init", 4096, NULL, 5, NULL);
+
+    ESP_LOGI(TAG, "Display ESP-Brookesia phone demo");
+    bsp_display_lock(0);
+
+    ESP_Brookesia_Phone *phone = new ESP_Brookesia_Phone();
+    assert(phone != nullptr && "Failed to create phone");
+
+    ESP_Brookesia_PhoneStylesheet_t *phone_stylesheet =
+        new ESP_Brookesia_PhoneStylesheet_t ESP_BROOKESIA_PHONE_1024_600_DARK_STYLESHEET();
+    ESP_BROOKESIA_CHECK_NULL_EXIT(phone_stylesheet, "Create phone stylesheet failed");
+    ESP_BROOKESIA_CHECK_FALSE_EXIT(phone->addStylesheet(*phone_stylesheet), "Add phone stylesheet failed");
+    ESP_BROOKESIA_CHECK_FALSE_EXIT(phone->activateStylesheet(*phone_stylesheet), "Activate phone stylesheet failed");
+
+    assert(phone->begin() && "Failed to begin phone");
+
+    Calculator *calculator = new Calculator();
+    assert(calculator != nullptr && "Failed to create calculator");
+    assert((phone->installApp(calculator) >= 0) && "Failed to begin calculator");
+    MusicPlayer *music_player = new MusicPlayer();
+    assert(music_player != nullptr && "Failed to create music_player");
+    assert((phone->installApp(music_player) >= 0) && "Failed to begin music_player");
+
+    AppSettings *app_settings = new AppSettings();
+    assert(app_settings != nullptr && "Failed to create app_settings");
+    assert((phone->installApp(app_settings) >= 0) && "Failed to begin app_settings");
+
+    Game2048 *game_2048 = new Game2048();
+    assert(game_2048 != nullptr && "Failed to create game_2048");
+    assert((phone->installApp(game_2048) >= 0) && "Failed to begin game_2048");
+
+    Camera *camera = new Camera(1024, 600);
+    assert(camera != nullptr && "Failed to create camera");
+    assert((phone->installApp(camera) >= 0) && "Failed to begin camera");
+
+    if (ret_sdcard == ESP_OK && ret_spiffs == ESP_OK) {
+        AppVideoPlayer *video_player = new AppVideoPlayer();
+        assert(video_player != nullptr && "Failed to create video_player");
+        assert((phone->installApp(video_player) >= 0) && "Failed to begin video_player");
+    }
+
+    bsp_display_unlock();
+
+    char buffer[128];
+    size_t internal_free = 0;
+    size_t internal_total = 0;
+    size_t external_free = 0;
+    size_t external_total = 0;
+
+    while (1) {
+        internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        internal_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+        external_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        external_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+
+        sprintf(buffer,
+                "   Biggest /     Free /    Total\n"
+                "\t  SRAM : [%d / %d / %d] KB\n"
+                "\t PSRAM : [%d / %d / %d] KB",
+                heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024, internal_free / 1024,
+                internal_total / 1024, heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024,
+                external_free / 1024, external_total / 1024);
+        ESP_LOGI("MEM", "%s", buffer);
+
+        if (internal_free < 10 * 1024) {
+            ESP_LOGW("MEM", "WARNING: Internal memory critically low!");
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+}

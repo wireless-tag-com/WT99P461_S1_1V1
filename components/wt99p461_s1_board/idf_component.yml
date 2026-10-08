@@ -1,0 +1,14 @@
+dependencies:
+  esp_codec_dev:
+    public: true
+    version: "1.5.11"
+  esp_lcd_touch_gt911: "1.2.1"
+  espressif/esp_lvgl_port:
+    public: true
+    version: "2.8.0~1"
+  idf: '==6.0.1'
+  lvgl/lvgl: '8.4.0'
+  
+  espressif/usb: "1.5.0"
+  
+  espressif/ip101: "1.0.0"

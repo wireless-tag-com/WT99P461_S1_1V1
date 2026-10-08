@@ -1,0 +1,31 @@
+menu "LVGL optional decoder stubs (keep disabled)"
+
+config LV_USE_LIBJPEG_TURBO
+    bool "Enable LVGL libjpeg-turbo dependency (stub)"
+    default n
+    help
+        Stub for IDF Component Manager when resolving LVGL 9 optional deps.
+        Keep disabled; this project uses LVGL 8.4.
+
+config LV_USE_LIBPNG
+    bool "Enable LVGL libpng dependency (stub)"
+    default n
+    help
+        Stub for IDF Component Manager when resolving LVGL 9 optional deps.
+        Keep disabled; this project uses LVGL 8.4.
+
+config LV_USE_LZ4
+    bool "Enable LVGL lz4 dependency (stub)"
+    default n
+    help
+        Stub for IDF Component Manager when resolving LVGL 9 optional deps.
+        Keep disabled; this project uses LVGL 8.4.
+
+config LV_USE_LZ4_INTERNAL
+    bool "Use LVGL internal lz4 (stub)"
+    default n
+    depends on LV_USE_LZ4
+    help
+        Stub for IDF Component Manager when resolving LVGL 9 optional deps.
+
+endmenu
